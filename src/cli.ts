@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import pc from "picocolors";
 import { check } from "./commands/check.js";
-import { init } from "./commands/init.js";
+import { init, type InitOptions } from "./commands/init.js";
 import { update, type UpdateOptions } from "./commands/update.js";
 
 const program = new Command();
@@ -28,8 +28,9 @@ addUpdateOptions(program.command("update", { isDefault: true }))
 program
   .command("init")
   .description("detect project structure, write config and starter docs")
-  .action(async () => {
-    await init();
+  .option("-y, --yes", "accept the detected areas without asking")
+  .action(async (opts: InitOptions) => {
+    process.exitCode = await init(opts);
   });
 
 program

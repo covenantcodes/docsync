@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import pc from "picocolors";
 import { CONFIG_FILE, loadConfig } from "../core/config.js";
 import { changedFiles, diffFor, headSha, isGitRepo, repoRoot, resolveBase } from "../core/git.js";
-import { filterIgnored, groupByArea } from "../core/mapper.js";
+import { groupChanges } from "../core/mapper.js";
 import { SYSTEM_PROMPT, buildUserPrompt, redactSecrets, requestEdits, truncateDiff } from "../core/prompt.js";
 import { colorizePatch, confirmPrompt, renderPatch, type Confirm } from "../core/review.js";
 import { applyEdits, readSections } from "../core/sections.js";
@@ -75,9 +75,7 @@ export async function update(opts: UpdateOptions, overrides: Partial<UpdateDeps>
   const baseLabel = staged ? "staged changes" : `${base.slice(0, 7)}`;
 
   // Docs and docsync's own files are outputs, not inputs.
-  const own = new Set([STATE_FILE, CONFIG_FILE, ...config.areas.map((a) => a.doc)]);
-  const files = filterIgnored(await changedFiles(root, base, staged), config.ignore).filter((f) => !own.has(f));
-  const groups = groupByArea(files, config.areas);
+  const groups = groupChanges(await changedFiles(root, base, staged), config, [STATE_FILE, CONFIG_FILE]);
 
   if (groups.length === 0) {
     log(pc.green("Docs are up to date: no relevant code changes since ") + baseLabel + ".");

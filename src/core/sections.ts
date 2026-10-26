@@ -61,3 +61,12 @@ export function applyEdits(md: string, edits: SectionEdit[]): string {
   for (const e of edits) out = writeSection(out, e.section, e.content);
   return out;
 }
+
+export const DEFAULT_SECTIONS = ["overview", "setup", "architecture", "changelog"] as const;
+
+/** A new doc: a human-owned title followed by the default managed sections, each with a placeholder. */
+export function starterDoc(title: string): string {
+  let md = `# ${title}\n`;
+  for (const name of DEFAULT_SECTIONS) md = writeSection(md, name, "_Not documented yet. Run `docsync` to fill this in._");
+  return md;
+}
