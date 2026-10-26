@@ -22,7 +22,7 @@ function addUpdateOptions(cmd: Command): Command {
 addUpdateOptions(program.command("update", { isDefault: true }))
   .description("update managed doc sections from recent changes (default)")
   .action(async (opts: UpdateOptions) => {
-    await update(opts);
+    process.exitCode = await update(opts);
   });
 
 program

@@ -49,3 +49,15 @@ export function writeSection(md: string, name: string, content: string): string 
   const gap = /(\r?\n){2}$/.test(base) ? "" : eol;
   return base + gap + block + eol;
 }
+
+export interface SectionEdit {
+  section: string;
+  content: string;
+}
+
+/** Applies edits in order, skipping ones that wouldn't change anything. */
+export function applyEdits(md: string, edits: SectionEdit[]): string {
+  let out = md;
+  for (const e of edits) out = writeSection(out, e.section, e.content);
+  return out;
+}
