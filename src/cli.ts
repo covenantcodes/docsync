@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import pc from "picocolors";
+import pkg from "../package.json" with { type: "json" };
 import { check } from "./commands/check.js";
 import { init, type InitOptions } from "./commands/init.js";
 import { update, type UpdateOptions } from "./commands/update.js";
@@ -9,7 +10,7 @@ const program = new Command();
 program
   .name("docsync")
   .description("Keep project docs up to date from your git changes.")
-  .version("0.1.0");
+  .version(pkg.version);
 
 function addUpdateOptions(cmd: Command): Command {
   return cmd
@@ -28,7 +29,10 @@ addUpdateOptions(program.command("update", { isDefault: true }))
 program
   .command("init")
   .description("detect project structure, write config and starter docs")
-  .option("-y, --yes", "accept the detected areas without asking")
+  .option("-y, --yes", "accept detected areas and provider without asking")
+  .option("--provider <name>", "anthropic, openai, gemini, ollama, openai-compatible, cli or manual")
+  .option("--model <name>", "model to use (required for most non-Anthropic providers)")
+  .option("--base-url <url>", "endpoint for openai-compatible (or a non-default Ollama)")
   .action(async (opts: InitOptions) => {
     process.exitCode = await init(opts);
   });

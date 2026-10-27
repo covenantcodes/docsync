@@ -35,7 +35,16 @@ afterEach(async () => {
 
 function deps(extra: Partial<InitDeps> = {}) {
   const lines: string[] = [];
-  const d: Partial<InitDeps> = { cwd: dir, log: (l) => lines.push(l), isInteractive: true, chooseAreas: async () => "use", ...extra };
+  const d: Partial<InitDeps> = {
+    cwd: dir,
+    log: (l) => lines.push(l),
+    isInteractive: true,
+    chooseAreas: async () => "use",
+    detect: async () => ({ keys: [], ollamaModels: null }),
+    chooseProvider: async () => "anthropic",
+    ask: async () => undefined,
+    ...extra,
+  };
   return { d, out: () => lines.join("\n") };
 }
 
@@ -204,6 +213,81 @@ describe("init", () => {
       await expect(init({}, { ...deps().d, cwd: plain })).rejects.toThrow(/Not inside a git repository/);
     } finally {
       await rm(plain, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("init: provider choice", () => {
+  const cfg = async () => JSON.parse(await read("docsync.config.json"));
+  beforeEach(async () => {
+    await put("main.py");
+    await commit();
+  });
+
+  it("defaults to anthropic when nothing is detected", async () => {
+    const { d, out } = deps();
+    await init({ yes: true }, d);
+    expect(await cfg()).toMatchObject({ provider: "anthropic", model: "claude-sonnet-5-5" });
+    expect(out()).toContain("ANTHROPIC_API_KEY");
+  });
+
+  it("--yes picks a key you already have", async () => {
+    // openai needs a model; with --yes and no --model that is an error, not a guess
+    await expect(
+      init({ yes: true }, deps({ detect: async () => ({ keys: ["openai"], ollamaModels: null }) }).d),
+    ).rejects.toThrow(/--model/);
+    await init({ yes: true, model: "some-model" }, deps({ detect: async () => ({ keys: ["openai"], ollamaModels: null }) }).d);
+    expect(await cfg()).toMatchObject({ provider: "openai", model: "some-model" });
+  });
+
+  it("--yes picks a running Ollama and its first model", async () => {
+    const { d, out } = deps({ detect: async () => ({ keys: [], ollamaModels: ["llama3:8b", "qwen:7b"] }) });
+    await init({ yes: true }, { ...d, isInteractive: false });
+    expect(await cfg()).toMatchObject({ provider: "ollama", model: "llama3:8b" });
+    expect(out()).toContain("ollama pull");
+  });
+
+  it("interactive: asks which provider and for the model", async () => {
+    const chooseProvider = vi.fn(async () => "gemini" as const);
+    const ask = vi.fn(async () => "my-gemini-model");
+    await init({}, deps({ chooseProvider, ask }).d);
+    expect(chooseProvider).toHaveBeenCalledOnce();
+    expect(await cfg()).toMatchObject({ provider: "gemini", model: "my-gemini-model" });
+  });
+
+  it("flags skip the questions", async () => {
+    const chooseProvider = vi.fn(async () => "anthropic" as const);
+    await init({ provider: "openai-compatible", baseUrl: "http://localhost:1234/v1", model: "m" }, deps({ chooseProvider }).d);
+    expect(chooseProvider).not.toHaveBeenCalled();
+    expect(await cfg()).toMatchObject({ provider: "openai-compatible", baseUrl: "http://localhost:1234/v1", model: "m" });
+  });
+
+  it("keyless providers need nothing else and say how to proceed", async () => {
+    const a = deps();
+    await init({ provider: "cli" }, a.d);
+    expect(a.out()).toContain("DOCSYNC_CLI");
+    expect((await cfg()).provider).toBe("cli");
+  });
+
+  it("rejects unknown providers and missing model/baseUrl in non-interactive mode", async () => {
+    await expect(init({ provider: "nope" }, deps().d)).rejects.toThrow(/Unknown provider/);
+    await expect(init({ provider: "ollama" }, deps({ isInteractive: false }).d)).rejects.toThrow(/--model/);
+    await expect(init({ provider: "openai-compatible" }, deps({ isInteractive: false }).d)).rejects.toThrow(/--base-url/);
+  });
+
+  it("the written config always validates", async () => {
+    for (const [provider, extra] of [
+      ["anthropic", {}],
+      ["openai", { model: "m" }],
+      ["gemini", { model: "m" }],
+      ["ollama", { model: "m" }],
+      ["cli", {}],
+      ["manual", {}],
+    ] as const) {
+      await rm(join(dir, "docsync.config.json"), { force: true });
+      await init({ provider, ...extra }, deps().d);
+      const written = JSON.parse(await read("docsync.config.json"));
+      expect(() => parseConfig(written)).not.toThrow();
     }
   });
 });

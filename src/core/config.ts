@@ -18,20 +18,44 @@ const AreaSchema = z.object({
   doc: z.string().min(1),
 });
 
+export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5";
+
+// Providers where the user must name a model (we don't guess model ids for other vendors or local installs).
+const MODEL_REQUIRED = new Set(["openai", "gemini", "ollama", "openai-compatible"]);
+
 // API keys are deliberately not part of the config; they come from the environment.
-export const ConfigSchema = z.object({
+// `apiKeyEnv` only names the environment variable to read.
+const BaseSchema = z.object({
   provider: z.string().default("anthropic"),
-  model: z.string().default("claude-sonnet-5-5"),
+  model: z.string().min(1).optional(),
+  baseUrl: z.url().optional(),
+  apiKeyEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be an environment variable name").optional(),
+  /** Ollama only: context window in tokens (num_ctx). */
+  contextWindow: z.number().int().positive().optional(),
+  /** Max diff characters sent per area. Defaults depend on the provider. */
+  maxDiffChars: z.number().int().positive().optional(),
   areas: z.array(AreaSchema).min(1),
   ignore: z.array(z.string()).default(DEFAULT_IGNORE),
 });
 
+export const ConfigSchema = BaseSchema.superRefine((c, ctx) => {
+  if (MODEL_REQUIRED.has(c.provider) && !c.model) {
+    ctx.addIssue({ code: "custom", path: ["model"], message: `required for provider "${c.provider}"` });
+  }
+  if (c.provider === "openai-compatible" && !c.baseUrl) {
+    ctx.addIssue({ code: "custom", path: ["baseUrl"], message: 'required for provider "openai-compatible"' });
+  }
+}).transform((c) => ({
+  ...c,
+  model: c.model ?? (c.provider === "anthropic" ? DEFAULT_ANTHROPIC_MODEL : undefined),
+}));
+
 export type Area = z.infer<typeof AreaSchema>;
-export type Config = z.infer<typeof ConfigSchema>;
+export type Config = z.output<typeof ConfigSchema>;
 
 export const defaultConfig = (): Config => ({
   provider: "anthropic",
-  model: "claude-sonnet-5-5",
+  model: DEFAULT_ANTHROPIC_MODEL,
   areas: [{ name: "project", paths: ["**"], doc: "docs/OVERVIEW.md" }],
   ignore: [...DEFAULT_IGNORE],
 });

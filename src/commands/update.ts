@@ -8,7 +8,7 @@ import { SYSTEM_PROMPT, buildUserPrompt, redactSecrets, requestEdits, truncateDi
 import { colorizePatch, confirmPrompt, renderPatch, type Confirm } from "../core/review.js";
 import { applyEdits, readSections } from "../core/sections.js";
 import { STATE_FILE, readState, writeState } from "../core/state.js";
-import { createProvider, type Provider } from "../providers/index.js";
+import { createProvider, maxDiffChars, type Provider } from "../providers/index.js";
 
 export interface UpdateOptions {
   since?: string;
@@ -89,7 +89,7 @@ export async function update(opts: UpdateOptions, overrides: Partial<UpdateDeps>
     const docPath = join(root, area.doc);
     let outcome: AreaOutcome;
     try {
-      outcome = await updateArea({ area, areaFiles, docPath, root, base, staged, provider, opts, deps });
+      outcome = await updateArea({ area, areaFiles, docPath, root, base, staged, provider, opts, deps, maxChars: maxDiffChars(config) });
     } catch (err) {
       log(pc.red(`  ✗ ${area.name}: ${err instanceof Error ? err.message : String(err)}`));
       if (process.env.DEBUG === "docsync" && err instanceof Error) log(String(err.stack));
@@ -127,6 +127,7 @@ async function updateArea(a: {
   provider: Provider;
   opts: UpdateOptions;
   deps: UpdateDeps;
+  maxChars: number;
 }): Promise<AreaOutcome> {
   const { log } = a.deps;
 
@@ -135,7 +136,7 @@ async function updateArea(a: {
     log(pc.dim("  No textual changes (binary or mode-only)."));
     return "unchanged";
   }
-  const { text: diff, truncated } = truncateDiff(redactSecrets(raw));
+  const { text: diff, truncated } = truncateDiff(redactSecrets(raw), a.maxChars);
   if (truncated) log(pc.yellow("  ! Diff is large and was truncated; the docs may miss some changes."));
 
   const oldDoc = await readDoc(a.docPath);
