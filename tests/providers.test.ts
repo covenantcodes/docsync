@@ -102,11 +102,11 @@ describe("openai / gemini / openai-compatible", () => {
 
   it("maps errors to friendly messages", async () => {
     const mk = (res: Response) =>
-      createOpenAIProvider({ provider: "openai", model: "m" }, { env: { OPENAI_API_KEY: "k" }, fetch: fakeFetch(res) });
+      createOpenAIProvider({ provider: "openai", model: "m" }, { env: { OPENAI_API_KEY: "k" }, fetch: fakeFetch(res), sleep: async () => {} });
     await expect(mk(json({ error: { message: "bad" } }, 401)).complete("s", "u")).rejects.toThrow(/rejected the API key/);
     await expect(mk(json({ error: { message: "no such model" } }, 404)).complete("s", "u")).rejects.toThrow(/no such model/);
     await expect(mk(json({}, 429)).complete("s", "u")).rejects.toThrow(/rate limit/);
-    await expect(mk(json({ error: { message: "boom" } }, 500)).complete("s", "u")).rejects.toThrow(/error 500: boom/);
+    await expect(mk(json({ error: { message: "bad input" } }, 422)).complete("s", "u")).rejects.toThrow(/error 422: bad input/);
   });
 
   it("handles truncated, filtered, and empty replies", async () => {
@@ -133,7 +133,7 @@ describe("ollama", () => {
     const f = fakeFetch(ok);
     expect(await createOllamaProvider({ model: "llama3" }, { fetch: f }).complete("s", "u")).toBe("[]");
     expect(f.mock.calls[0]![0]).toBe("http://localhost:11434/api/chat");
-    expect(body(f)).toMatchObject({ model: "llama3", stream: false, options: { num_ctx: 16384 } });
+    expect(body(f)).toMatchObject({ model: "llama3", stream: true, options: { num_ctx: 16384 } });
   });
 
   it("honours baseUrl and contextWindow", async () => {
@@ -237,5 +237,146 @@ describe("detectProviders", () => {
   it("suggests Ollama when it has models and no keys exist", () => {
     expect(bestGuess({ keys: [], ollamaModels: ["m"] })).toBe("ollama");
     expect(bestGuess({ keys: [], ollamaModels: [] })).toBeUndefined();
+  });
+});
+
+const sse = (...chunks: unknown[]) =>
+  new Response(chunks.map((c) => `data: ${typeof c === "string" ? c : JSON.stringify(c)}\n\n`).join(""), {
+    headers: { "content-type": "text/event-stream" },
+  });
+const delta = (content: string, finish_reason: string | null = null) => ({ choices: [{ delta: { content }, finish_reason }] });
+
+describe("streaming", () => {
+  const openai = (res: () => Response, extra: object = {}) =>
+    createOpenAIProvider({ provider: "openai", model: "m", ...extra }, { env: { OPENAI_API_KEY: "k" }, fetch: fakeFetch(res) });
+
+  it("assembles an SSE reply and reports progress", async () => {
+    const onEvent = vi.fn();
+    const p = openai(() => sse(delta("[{"), delta('"a":1}]'), delta("", "stop"), "[DONE]"));
+    expect(await p.complete("s", "u", { onEvent })).toBe('[{"a":1}]');
+    expect(onEvent.mock.calls.map((c) => c[0])).toEqual([
+      { type: "progress", chars: 2 },
+      { type: "progress", chars: 9 },
+    ]);
+  });
+
+  it("handles events split across network chunks", async () => {
+    const full = `data: ${JSON.stringify(delta("hel"))}\n\ndata: ${JSON.stringify(delta("lo", "stop"))}\n\ndata: [DONE]\n\n`;
+    const bytes = new TextEncoder().encode(full);
+    const stream = new ReadableStream({
+      start(c) {
+        for (let i = 0; i < bytes.length; i += 7) c.enqueue(bytes.slice(i, i + 7));
+        c.close();
+      },
+    });
+    const p = openai(() => new Response(stream, { headers: { "content-type": "text/event-stream" } }));
+    expect(await p.complete("s", "u")).toBe("hello");
+  });
+
+  it("flags a truncated stream and an in-stream error", async () => {
+    await expect(openai(() => sse(delta("[", "length"))).complete("s", "u")).rejects.toThrow(/cut off/);
+    await expect(openai(() => sse(delta("x"), { error: { message: "quota" } })).complete("s", "u")).rejects.toThrow(/quota/);
+  });
+
+  it("still accepts a server that ignores stream:true", async () => {
+    const p = openai(() => json({ choices: [{ message: { content: "[]" }, finish_reason: "stop" }] }));
+    expect(await p.complete("s", "u")).toBe("[]");
+  });
+
+  it("ollama streams NDJSON and reports progress", async () => {
+    const lines = [{ message: { content: "[" } }, { message: { content: "]" } }, { done: true, done_reason: "stop" }];
+    const onEvent = vi.fn();
+    const p = createOllamaProvider(
+      { model: "m" },
+      { fetch: fakeFetch(() => new Response(lines.map((l) => JSON.stringify(l)).join("\n"), { headers: { "content-type": "application/x-ndjson" } })) },
+    );
+    expect(await p.complete("s", "u", { onEvent })).toBe("[]");
+    expect(onEvent).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("retries", () => {
+  const busy = (status = 503, headers: Record<string, string> = {}) =>
+    new Response(JSON.stringify([{ error: { code: status, message: "high demand" } }]), { status, headers });
+  const ok = () => json({ choices: [{ message: { content: "[]" }, finish_reason: "stop" }] });
+  const mk = (responses: (() => Response)[], sleep = vi.fn(async (_ms: number) => {})) => {
+    let i = 0;
+    const f = vi.fn(async () => responses[Math.min(i++, responses.length - 1)]!());
+    const p = createOpenAIProvider({ provider: "gemini", model: "m" }, { env: { GEMINI_API_KEY: "k" }, fetch: f as unknown as typeof fetch, sleep });
+    return { p, f, sleep };
+  };
+
+  it("retries 503 with a visible event, then succeeds", async () => {
+    const { p, f, sleep } = mk([() => busy(), () => busy(), ok]);
+    const onEvent = vi.fn();
+    expect(await p.complete("s", "u", { onEvent })).toBe("[]");
+    expect(f).toHaveBeenCalledTimes(3);
+    expect(sleep.mock.calls.map((c) => c[0])).toEqual([2000, 5000]);
+    expect(onEvent.mock.calls[0]![0]).toMatchObject({ type: "retry", attempt: 1, maxAttempts: 4, delayMs: 2000, reason: "Gemini is overloaded (503)" });
+  });
+
+  it("honours Retry-After (capped at a minute)", async () => {
+    const { p, sleep } = mk([() => busy(429, { "retry-after": "7" }), () => busy(429, { "retry-after": "999" }), ok]);
+    await p.complete("s", "u");
+    expect(sleep.mock.calls.map((c) => c[0])).toEqual([7000, 60000]);
+  });
+
+  it("gives up after 4 attempts with a clear message", async () => {
+    const { p, f } = mk([() => busy()]);
+    await expect(p.complete("s", "u")).rejects.toThrow(/gave up after 4 attempts/);
+    expect(f).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not retry errors that can't succeed (401, 404, 400)", async () => {
+    for (const status of [400, 401, 404]) {
+      const { p, f } = mk([() => busy(status)]);
+      await expect(p.complete("s", "u")).rejects.toThrow();
+      expect(f).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("ollama retries too", async () => {
+    let n = 0;
+    const f = vi.fn(async () => (n++ < 1 ? busy(503) : json({ message: { content: "[]" }, done: true })));
+    const sleep = vi.fn(async (_ms: number) => {});
+    const p = createOllamaProvider({ model: "m" }, { fetch: f as unknown as typeof fetch, sleep });
+    expect(await p.complete("s", "u")).toBe("[]");
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("reasoningEffort", () => {
+  const ok = () => json({ choices: [{ message: { content: "[]" }, finish_reason: "stop" }] });
+
+  it("is sent as reasoning_effort only when set", async () => {
+    const f = fakeFetch(ok);
+    await createOpenAIProvider({ provider: "gemini", model: "m", reasoningEffort: "low" }, { env: { GEMINI_API_KEY: "k" }, fetch: f }).complete("s", "u");
+    expect(body(f).reasoning_effort).toBe("low");
+    const g = fakeFetch(ok);
+    await createOpenAIProvider({ provider: "gemini", model: "m" }, { env: { GEMINI_API_KEY: "k" }, fetch: g }).complete("s", "u");
+    expect(body(g)).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("explains when the server rejects it", async () => {
+    const f = fakeFetch(() => json({ error: { message: "Invalid reasoning_effort value" } }, 400));
+    const p = createOpenAIProvider({ provider: "gemini", model: "m", reasoningEffort: "turbo" }, { env: { GEMINI_API_KEY: "k" }, fetch: f });
+    await expect(p.complete("s", "u")).rejects.toThrow(/rejected reasoningEffort "turbo"/);
+  });
+
+  it("ollama maps none to think:false and passes other values through", async () => {
+    const run = async (effort?: string) => {
+      const f = fakeFetch(() => json({ message: { content: "[]" }, done: true }));
+      await createOllamaProvider({ model: "m", reasoningEffort: effort }, { fetch: f }).complete("s", "u");
+      return body(f);
+    };
+    expect((await run("none")).think).toBe(false);
+    expect((await run("low")).think).toBe("low");
+    expect(await run()).not.toHaveProperty("think");
+  });
+
+  it("anthropic validates it; config accepts any string", () => {
+    expect(() => createAnthropicProvider({ model: "m", reasoningEffort: "turbo" }, { ANTHROPIC_API_KEY: "k" })).toThrow(/isn't valid for Anthropic/);
+    expect(() => createAnthropicProvider({ model: "m", reasoningEffort: "low" }, { ANTHROPIC_API_KEY: "k" })).not.toThrow();
+    expect(parseConfig({ provider: "gemini", model: "m", reasoningEffort: "low", areas: [{ name: "a", paths: ["a/**"], doc: "a.md" }] }).reasoningEffort).toBe("low");
   });
 });

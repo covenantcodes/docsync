@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { Provider } from "../providers/index.js";
+import type { CompleteOptions, Provider } from "../providers/index.js";
+import { normalizeTables } from "./markdown.js";
 
 export const MAX_DIFF_CHARS = 60_000;
 
@@ -107,15 +108,22 @@ export function parseEdits(text: string): Edit[] {
   }
   const res = EditsSchema.safeParse(raw);
   if (!res.success) throw new Error(`reply does not match the expected shape:\n${z.prettifyError(res.error)}`);
-  return res.data;
+  return res.data.map((e) => ({ ...e, content: normalizeTables(e.content) }));
 }
 
 /** Asks the provider for edits; on a bad reply retries once with the error appended, then throws. */
-export async function requestEdits(provider: Provider, system: string, user: string): Promise<Edit[]> {
-  const first = await provider.complete(system, user);
+export async function requestEdits(
+  provider: Provider,
+  system: string,
+  user: string,
+  onEvent?: CompleteOptions["onEvent"],
+): Promise<Edit[]> {
+  const options: CompleteOptions | undefined = onEvent ? { onEvent } : undefined;
+  const first = await provider.complete(system, user, options);
   try {
     return parseEdits(first);
   } catch (err) {
+    onEvent?.({ type: "invalid-reply", message: (err as Error).message });
     const retry = `${user}
 
 Your previous reply was rejected: ${(err as Error).message}
@@ -124,7 +132,7 @@ Previous reply:
 ${first}
 
 Reply again with valid JSON only, matching the format described.`;
-    const second = await provider.complete(system, retry);
+    const second = await provider.complete(system, retry, options);
     try {
       return parseEdits(second);
     } catch (err2) {

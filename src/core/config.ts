@@ -15,6 +15,8 @@ export const DEFAULT_IGNORE = [
 const FeatureSchema = z.object({
   /** Used on the command line (`docsync generate <name>`), so keep it simple. */
   name: z.string().regex(/^[A-Za-z0-9_-]+$/, "use letters, digits, '-' or '_'"),
+  /** Heading for a newly created doc, e.g. "Download API". Defaults to the name. */
+  title: z.string().min(1).optional(),
   /** Source files that implement the feature. May span several folders and overlap other features and areas. */
   paths: z.array(z.string().min(1)).min(1),
   doc: z.string().min(1),
@@ -40,6 +42,11 @@ const BaseSchema = z.object({
   apiKeyEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be an environment variable name").optional(),
   /** Ollama only: context window in tokens (num_ctx). */
   contextWindow: z.number().int().positive().optional(),
+  /**
+   * How hard the model should think, passed through to providers that support it (e.g. "low", "high", "none").
+   * Lower is faster and cheaper. The provider rejects values it doesn't know.
+   */
+  reasoningEffort: z.string().min(1).optional(),
   /** Max diff characters sent per area. Defaults depend on the provider. */
   maxDiffChars: z.number().int().positive().optional(),
   /** Max characters of source code sent per feature (`docsync generate`). Defaults depend on the provider. */

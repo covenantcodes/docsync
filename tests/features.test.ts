@@ -10,6 +10,8 @@ import { groupChanges } from "../src/core/mapper.js";
 import { collectSources, rankPath, selectFeatureFiles } from "../src/core/source.js";
 import { readSections } from "../src/core/sections.js";
 import { verifyEdits } from "../src/core/verify.js";
+import { normalizeTables } from "../src/core/markdown.js";
+import { parseEdits } from "../src/core/prompt.js";
 import type { Provider } from "../src/providers/index.js";
 
 const edit = (section: string, content: string) => ({ section, content, reason: `covers ${section}` });
@@ -24,9 +26,37 @@ describe("config: features", () => {
     expect(() => parseConfig({ areas, features: [f, f] })).toThrow(/duplicate feature/);
     expect(() => parseConfig({ areas, features: [{ ...f, paths: [] }] })).toThrow();
   });
+  it("accepts an optional title", () => {
+    const f = { name: "download-api", title: "Download API", paths: ["x/**"], doc: "d.md" };
+    expect(parseConfig({ areas, features: [f] }).features[0]!.title).toBe("Download API");
+  });
   it("feature docs are never treated as code changes", () => {
     const config = { areas: [{ name: "all", paths: ["**"], doc: "docs/all.md" }], ignore: [], features: [{ name: "f", paths: ["x/**"], doc: "docs/f.md" }] };
     expect(groupChanges(["docs/f.md", "a.ts"], config).flatMap((g) => g.files)).toEqual(["a.ts"]);
+  });
+});
+
+describe("normalizeTables", () => {
+  const sep = "|---|---|---|";
+  it("adds the missing separator row under a header", () => {
+    expect(normalizeTables("| A | B | C |\n| `x` | 1 | 2 |")).toBe(`| A | B | C |\n${sep}\n| \`x\` | 1 | 2 |`);
+  });
+  it("leaves valid tables, fences and single rows alone", () => {
+    const ok = "| A | B |\n|---|---|\n| 1 | 2 |";
+    expect(normalizeTables(ok)).toBe(ok);
+    const aligned = "| A | B |\n| :--- | ---: |\n| 1 | 2 |";
+    expect(normalizeTables(aligned)).toBe(aligned);
+    const fenced = "```\n| A | B |\n| 1 | 2 |\n```";
+    expect(normalizeTables(fenced)).toBe(fenced);
+    expect(normalizeTables("| only |\ntext")).toBe("| only |\ntext");
+  });
+  it("fixes several tables in one document and keeps the text around them", () => {
+    const md = "Intro\n\n| A | B |\n| 1 | 2 |\n\nMiddle\n\n| C |\n| 3 |\nEnd";
+    expect(normalizeTables(md)).toBe("Intro\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nMiddle\n\n| C |\n|---|\n| 3 |\nEnd");
+  });
+  it("is applied to every reply", () => {
+    const reply = JSON.stringify([{ section: "s", content: "| A | B |\n| 1 | 2 |", reason: "r" }]);
+    expect(parseEdits(reply)[0]!.content).toContain("|---|---|");
   });
 });
 
@@ -240,6 +270,21 @@ describe("generate", () => {
     await expect(read("docs/features/bills-payment.md")).rejects.toThrow();
     await go("bills-payment", {}, provider(good), { confirm: async () => false });
     await expect(read("docs/features/bills-payment.md")).rejects.toThrow();
+  });
+
+  it("uses the configured title for a new doc", async () => {
+    await put("docsync.config.json", JSON.stringify({
+      areas: [{ name: "a", paths: ["**"], doc: "a.md" }],
+      features: [{ name: "bills-payment", title: "Bills Payment API", paths: ["services/**"], doc: "docs/b.md" }],
+    }));
+    await go("bills-payment", { yes: true }, provider(good));
+    expect((await read("docs/b.md")).startsWith("# Bills Payment API\n")).toBe(true);
+  });
+
+  it("repairs tables the model wrote without a separator row", async () => {
+    const reply = JSON.stringify([edit("endpoints", "### POST /bills/pay\n| Parameter | In |\n| `accountNumber` | body |")]);
+    await go("bills-payment", { yes: true }, provider(reply));
+    expect(await read("docs/features/bills-payment.md")).toContain("| Parameter | In |\n|---|---|\n| `accountNumber` | body |");
   });
 
   it("keeps human text outside markers and leaves lastSha alone", async () => {

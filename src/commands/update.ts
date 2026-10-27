@@ -5,6 +5,7 @@ import { CONFIG_FILE, loadConfig } from "../core/config.js";
 import { changedFiles, diffFor, headSha, isGitRepo, repoRoot, resolveBase } from "../core/git.js";
 import { groupChanges } from "../core/mapper.js";
 import { SYSTEM_PROMPT, buildUserPrompt, redactSecrets, requestEdits, truncateDiff } from "../core/prompt.js";
+import { createStatus } from "../core/progress.js";
 import { confirmPrompt, type Confirm } from "../core/review.js";
 import { applyEdits, readSections } from "../core/sections.js";
 import { STATE_FILE, readState, writeState } from "../core/state.js";
@@ -26,6 +27,9 @@ export interface UpdateDeps {
   log: (line: string) => void;
   isInteractive: boolean;
   today: () => string;
+  /** Whether stdout is a terminal, so the progress line can be redrawn in place. */
+  tty: boolean;
+  write: (text: string) => void;
 }
 
 const localDate = (): string => {
@@ -40,6 +44,8 @@ const defaultDeps = (): UpdateDeps => ({
   log: (line) => console.log(line),
   isInteractive: Boolean(process.stdin.isTTY),
   today: localDate,
+  tty: Boolean(process.stdout.isTTY),
+  write: (text) => void process.stdout.write(text),
 });
 
 async function readDoc(path: string): Promise<string> {
@@ -151,8 +157,16 @@ async function updateArea(a: {
     date: a.deps.today(),
   });
 
-  log(pc.dim("  Asking the model..."));
-  const proposed = await requestEdits(a.provider, SYSTEM_PROMPT, user);
+  const status = createStatus({ log, tty: a.deps.tty, write: a.deps.write });
+  status.start();
+  let proposed;
+  try {
+    proposed = await requestEdits(a.provider, SYSTEM_PROMPT, user, status.event);
+    status.stop("done");
+  } catch (err) {
+    status.stop("failed");
+    throw err;
+  }
   const edits = proposed.filter((e) => (sections[e.section] ?? null) !== e.content.replace(/^\n+|\n+$/g, ""));
   const outcome = await reviewAndApply({
     doc: a.area.doc,

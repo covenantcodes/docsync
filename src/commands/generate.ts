@@ -4,6 +4,7 @@ import pc from "picocolors";
 import { CONFIG_FILE, loadConfig, type Feature } from "../core/config.js";
 import { FEATURE_SECTIONS, FEATURE_SYSTEM_PROMPT, buildFeaturePrompt } from "../core/feature-prompt.js";
 import { isGitRepo, repoRoot, trackedFiles } from "../core/git.js";
+import { createStatus } from "../core/progress.js";
 import { requestEdits } from "../core/prompt.js";
 import { applyEdits, readSections } from "../core/sections.js";
 import { collectSources, selectFeatureFiles } from "../core/source.js";
@@ -57,6 +58,8 @@ export async function generate(
     log: (line) => console.log(line),
     isInteractive: Boolean(process.stdin.isTTY),
     today: () => "",
+    tty: Boolean(process.stdout.isTTY),
+    write: (text) => void process.stdout.write(text),
     ...overrides,
   };
   const { log } = deps;
@@ -103,15 +106,24 @@ export async function generate(
 
       const docPath = join(root, feature.doc);
       const existing = await readDoc(docPath);
-      const oldDoc = existing ?? `# ${titleCase(feature.name)}\n`;
+      const oldDoc = existing ?? `# ${feature.title ?? titleCase(feature.name)}\n`;
       const sections = readSections(oldDoc);
 
-      log(pc.dim("  Asking the model..."));
-      const proposed = await requestEdits(
-        provider,
-        FEATURE_SYSTEM_PROMPT,
-        buildFeaturePrompt({ feature: feature.name, doc: feature.doc, sections, files, omitted }),
-      );
+      const status = createStatus({ log, tty: deps.tty, write: deps.write });
+      status.start();
+      let proposed;
+      try {
+        proposed = await requestEdits(
+          provider,
+          FEATURE_SYSTEM_PROMPT,
+          buildFeaturePrompt({ feature: feature.name, doc: feature.doc, sections, files, omitted }),
+          status.event,
+        );
+        status.stop("done");
+      } catch (err) {
+        status.stop("failed");
+        throw err;
+      }
 
       const order = FEATURE_SECTIONS.map((s) => s.name);
       const known = proposed.filter((e) => order.includes(e.section));

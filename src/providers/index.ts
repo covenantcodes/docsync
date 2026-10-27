@@ -5,15 +5,25 @@ import { createManualProvider } from "./manual.js";
 import { createOllamaProvider } from "./ollama.js";
 import { createOpenAIProvider } from "./openai.js";
 
+/** Things a provider (or the retry-on-bad-reply logic) tells the caller while a request is running. */
+export type ProviderEvent =
+  | { type: "progress"; chars: number }
+  | { type: "retry"; attempt: number; maxAttempts: number; delayMs: number; reason: string }
+  | { type: "invalid-reply"; message: string };
+
+export interface CompleteOptions {
+  onEvent?: (event: ProviderEvent) => void;
+}
+
 export interface Provider {
-  complete(system: string, user: string): Promise<string>;
+  complete(system: string, user: string, options?: CompleteOptions): Promise<string>;
 }
 
 export const PROVIDER_NAMES = ["anthropic", "openai", "gemini", "ollama", "openai-compatible", "cli", "manual"] as const;
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
 
 type ProviderConfig = Pick<Config, "provider"> &
-  Partial<Pick<Config, "model" | "baseUrl" | "apiKeyEnv" | "contextWindow" | "maxDiffChars" | "maxSourceChars">>;
+  Partial<Pick<Config, "model" | "baseUrl" | "apiKeyEnv" | "contextWindow" | "maxDiffChars" | "maxSourceChars" | "reasoningEffort">>;
 
 // Small local models have small context windows, and a human pasting into a chat UI has limits too.
 const DEFAULT_MAX_DIFF_CHARS: Record<string, number> = { ollama: 24_000, manual: 30_000 };
@@ -42,12 +52,18 @@ function requireModel(config: ProviderConfig): string {
 export function createProvider(config: ProviderConfig, env: NodeJS.ProcessEnv = process.env): Provider {
   switch (config.provider) {
     case "anthropic":
-      return createAnthropicProvider({ model: requireModel(config) }, env);
+      return createAnthropicProvider({ model: requireModel(config), reasoningEffort: config.reasoningEffort }, env);
     case "openai":
     case "gemini":
     case "openai-compatible":
       return createOpenAIProvider(
-        { provider: config.provider, model: requireModel(config), baseUrl: config.baseUrl, apiKeyEnv: config.apiKeyEnv },
+        {
+          provider: config.provider,
+          model: requireModel(config),
+          baseUrl: config.baseUrl,
+          apiKeyEnv: config.apiKeyEnv,
+          reasoningEffort: config.reasoningEffort,
+        },
         { env },
       );
     case "ollama":
@@ -55,6 +71,7 @@ export function createProvider(config: ProviderConfig, env: NodeJS.ProcessEnv = 
         model: requireModel(config),
         baseUrl: config.baseUrl,
         contextWindow: config.contextWindow,
+        reasoningEffort: config.reasoningEffort,
       });
     case "cli":
       return createCliProvider(env);

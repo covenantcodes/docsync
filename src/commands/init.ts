@@ -222,6 +222,7 @@ export async function init(opts: InitOptions = {}, overrides: Partial<InitDeps> 
       baseUrl: settings.baseUrl,
       apiKeyEnv: undefined,
       contextWindow: undefined,
+      reasoningEffort: undefined,
       maxDiffChars: undefined,
       maxSourceChars: undefined,
       areas: chosen,

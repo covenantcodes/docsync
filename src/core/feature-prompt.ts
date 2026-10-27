@@ -19,7 +19,7 @@ export const FEATURE_SECTIONS: FeatureSection[] = [
   {
     name: "endpoints",
     guidance:
-      'One "### METHOD /path" heading per endpoint the code defines or calls. Under each: purpose; auth (only if visible); a request table with columns Parameter | In (path/query/body/header) | Type | Required | Notes, with the parameter name in backticks exactly as written in the code; the response shape; and the error cases (status or code, and when it happens). Include an example request only if it can be built from the code, using obvious placeholders for values.',
+      'One "### METHOD /path" heading per endpoint the code defines or calls. Under each: purpose; auth (only if visible; otherwise leave the line out); a request table with columns Parameter | In (path/query/body/header) | Type | Required | Notes, with the parameter name in backticks exactly as written in the code; the response shape; and the error cases (status or code, and when it happens). Include an example request only if it can be built from the code, using obvious placeholders for values.',
   },
   {
     name: "data-models",
@@ -31,7 +31,7 @@ export const FEATURE_SECTIONS: FeatureSection[] = [
   },
   {
     name: "edge-cases",
-    guidance: "Validation rules, retries, idempotency, timeouts, and failure handling that are visible in the code.",
+    guidance: "Validation rules, retries, idempotency, timeouts, cleanup and failure handling that are visible in the code. List only what the code shows; do not list things that are absent.",
   },
 ];
 
@@ -39,7 +39,8 @@ export const FEATURE_SYSTEM_PROMPT = `You write developer documentation for one 
 
 Rules:
 - Document only what the provided source code shows. Never invent endpoints, parameters, fields, env vars, functions or behaviour.
-- If the code doesn't show something a section asks for, write exactly: Not found in the provided code.
+- If the code shows nothing at all for a section, make its whole content exactly: Not found in the provided code. Within a section that has content, simply leave out items the code doesn't show; don't list them as missing.
+- Write tables as GitHub-flavoured markdown, including the |---|---| separator row under the header.
 - Use identifiers (route paths, parameter names, env vars) exactly as they appear in the code.
 - End each section with a line "Sources: " followed by the files it is based on, each in backticks, using the exact paths given. Only cite files you were given.
 - Values shown as [REDACTED] are masked secrets; never try to reconstruct them, and never write secret values.

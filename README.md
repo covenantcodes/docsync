@@ -64,10 +64,13 @@ List features in `docsync.config.json`:
   {
     "name": "bills-payment",
     "paths": ["apps/mobile/src/bills/**", "services/api/src/bills/**"],
-    "doc": "docs/features/bills-payment.md"
+    "doc": "docs/features/bills-payment.md",
+    "title": "Bills Payment"
   }
 ]
 ```
+
+`title` is optional: it's the heading of a newly created doc (default: the name).
 
 ```bash
 npx docsync generate bills-payment --dry-run   # preview
@@ -139,6 +142,7 @@ Provider settings (all optional unless a provider needs them, see below):
 | `model` | Model name. Defaults to `claude-sonnet-5-5` for `anthropic`; required for `openai`, `gemini`, `ollama` and `openai-compatible`. |
 | `baseUrl` | Endpoint. Required for `openai-compatible`; optional for `ollama` (default `http://localhost:11434`). |
 | `apiKeyEnv` | Name of the environment variable that holds the key, if not the default. |
+| `reasoningEffort` | How hard the model thinks, passed to providers that support it. See [Slow or busy models](#slow-or-busy-models). |
 | `contextWindow` | Ollama only: context size in tokens (default 16384). |
 | `maxDiffChars` | Most diff characters sent per area. Default 60,000 (24,000 for Ollama, 30,000 for `manual`). |
 | `maxSourceChars` | Most source characters sent per feature (`generate`). Default 120,000 (30,000 for Ollama, 40,000 for `manual`). |
@@ -183,6 +187,27 @@ Examples:
 Small local models write weaker docs and sometimes break the JSON format. docsync validates every reply and retries once, and you always review the diff before anything is written.
 
 The provider interface is one method, `complete(system, user): Promise<string>`, so new providers don't touch the core.
+
+## Slow or busy models
+
+While the model works, docsync shows a live line with the elapsed time and how many characters of the reply have arrived (replies are streamed), so a slow model is obvious rather than silent:
+
+```
+  ⠹ Asking the model 48s · 3,120 chars received
+```
+
+- **Automatic retries.** If the provider answers 429, 500, 502, 503, 504 or 529 (rate limited or overloaded), docsync retries up to 3 times, waiting 2s, 5s, then 15s, or however long the provider's `Retry-After` says (at most a minute). Each retry prints a notice such as `! Gemini is overloaded (503). Retrying in 5s (attempt 2 of 4)...`. Errors that can't succeed on retry (a bad key, an unknown model) fail immediately.
+- **Bad replies.** If the model's reply isn't valid JSON of the right shape, docsync tells you and asks once more.
+- **`reasoningEffort`.** Reasoning models can spend minutes thinking before they write. Setting a lower effort is faster and cheaper:
+
+  | Provider | What happens |
+  |---|---|
+  | `gemini`, `openai`, `openai-compatible` | Sent as `reasoning_effort` (for example `"low"`; some models also accept `"none"` or `"minimal"`). The server rejects values it doesn't know, and docsync tells you which one it rejected. |
+  | `anthropic` | Sent as the model's `effort`: `low`, `medium`, `high`, `xhigh` or `max`. |
+  | `ollama` | `"none"` turns thinking off; other values are passed to Ollama's `think` option. |
+  | `cli`, `manual` | Ignored. |
+
+  Not every model supports every value (some always think), so if one is rejected, try another or remove the setting.
 
 ## CI
 
