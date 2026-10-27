@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { check } from "../src/commands/check.js";
 import { update } from "../src/commands/update.js";
 import { headSha } from "../src/core/git.js";
-import { findStale } from "../src/core/mapper.js";
 import { readState, writeState } from "../src/core/state.js";
 
 let dir: string;
@@ -129,6 +128,37 @@ describe("check", () => {
     }
   });
 
+  it("a code-only commit after an older doc commit is still stale", async () => {
+    await put("apps/web/a.ts", "2\n");
+    await put("docs/web.md", "# web\nmore\n");
+    await commit("code+doc");
+    expect((await go()).code).toBe(0);
+    await put("apps/web/a.ts", "3\n");
+    await commit("code only");
+    expect((await go()).code).toBe(1);
+  });
+
+  it("doc committed after the code is fresh (separate commits)", async () => {
+    await put("apps/web/a.ts", "2\n");
+    await commit("code");
+    await put("docs/web.md", "# web\nmore\n");
+    await commit("doc");
+    expect((await go()).code).toBe(0);
+  });
+
+  it("a doc created by init does not hide later code changes", async () => {
+    await run("rm", "-q", "-r", "docs");
+    await commit("remove docs");
+    await put(".docsync.json", JSON.stringify({ lastSha: await headSha(dir) }));
+    await commit("state at HEAD");
+    await put("docs/web.md", "# web\n"); // what init would create
+    await commit("docsync init");
+    expect((await go()).code).toBe(0);
+    await put("apps/web/a.ts", "9\n");
+    await commit("feature");
+    expect((await go()).code).toBe(1);
+  });
+
   it("makes no LLM call and passes right after a successful update", async () => {
     await put("apps/web/a.ts", "2\n");
     const provider = { complete: async () => JSON.stringify([{ section: "overview", content: "New", reason: "r" }]) };
@@ -136,16 +166,5 @@ describe("check", () => {
     expect((await go()).code).toBe(0); // uncommitted
     await commit("after docsync");
     expect((await go()).code).toBe(0); // committed
-  });
-});
-
-describe("findStale", () => {
-  const config = { areas: [{ name: "a", paths: ["a/**"], doc: "docs/a.md" }], ignore: [] };
-  it("is pure: no changed files means nothing stale", () => {
-    expect(findStale([], config)).toEqual([]);
-  });
-  it("treats a changed doc as fresh", () => {
-    expect(findStale(["a/x.ts", "docs/a.md"], config)).toEqual([]);
-    expect(findStale(["a/x.ts"], config)).toHaveLength(1);
   });
 });

@@ -43,13 +43,3 @@ export function groupChanges(
     config.areas,
   );
 }
-
-/** Areas whose code changed while their doc file did not. */
-export function findStale(
-  files: string[],
-  config: Pick<Config, "areas" | "ignore">,
-  ownFiles: string[] = [],
-): AreaChange[] {
-  const changed = new Set(files);
-  return groupChanges(files, config, ownFiles).filter((g) => !changed.has(g.area.doc));
-}

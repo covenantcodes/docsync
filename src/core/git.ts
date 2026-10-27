@@ -58,3 +58,18 @@ export async function diffFor(cwd: string, base: string, files: string[], staged
   if (files.length === 0) return "";
   return git(cwd, ["diff", "--no-color", "--no-renames", "--no-ext-diff", ...diffArgs(base, staged), "--", ...files]);
 }
+
+// `a..HEAD` doesn't work when `a` is the empty tree, so a root-commit base means "all of HEAD's history".
+const sinceRange = (from: string): string => (from === EMPTY_TREE ? "HEAD" : `${from}..HEAD`);
+
+/** Newest commit after `from` (exclusive) that touched any of `paths`, or null. */
+export async function lastCommitTouching(cwd: string, from: string, paths: string[]): Promise<string | null> {
+  if (paths.length === 0) return null;
+  const out = await git(cwd, ["log", "-1", "--format=%H", sinceRange(from), "--", ...paths]);
+  return out || null;
+}
+
+/** True if any commit after `from` (exclusive) touched any of `paths`. */
+export async function touchedSince(cwd: string, from: string, paths: string[]): Promise<boolean> {
+  return (await lastCommitTouching(cwd, from, paths)) !== null;
+}

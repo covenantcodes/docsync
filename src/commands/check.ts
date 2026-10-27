@@ -1,7 +1,7 @@
 import pc from "picocolors";
 import { CONFIG_FILE, loadConfig } from "../core/config.js";
-import { changedFiles, isGitRepo, repoRoot, resolveBase } from "../core/git.js";
-import { findStale } from "../core/mapper.js";
+import { changedFiles, isGitRepo, lastCommitTouching, repoRoot, resolveBase, touchedSince } from "../core/git.js";
+import { groupChanges, type AreaChange } from "../core/mapper.js";
 import { STATE_FILE, readState } from "../core/state.js";
 
 export interface CheckDeps {
@@ -31,7 +31,10 @@ export async function check(overrides: Partial<CheckDeps> = {}): Promise<number>
     });
   }
 
-  const stale = findStale(await changedFiles(root, base), config, [STATE_FILE, CONFIG_FILE]);
+  const groups = groupChanges(await changedFiles(root, base), config, [STATE_FILE, CONFIG_FILE]);
+  const dirty = new Set(await changedFiles(root, "HEAD")); // uncommitted edits to tracked files
+  const stale: AreaChange[] = [];
+  for (const g of groups) if (await isStale(root, base, g, dirty)) stale.push(g);
   if (stale.length === 0) {
     log(pc.green("✔ Docs are up to date."));
     return 0;
@@ -44,4 +47,16 @@ export async function check(overrides: Partial<CheckDeps> = {}): Promise<number>
   }
   log(`\n${stale.length} doc${stale.length === 1 ? " is" : "s are"} out of date. Run ${pc.cyan("docsync")} and commit the result.`);
   return 1;
+}
+
+/**
+ * An area is stale when its code changed after its doc did. Order matters: a doc edit made long ago
+ * (or by `docsync init`) must not hide newer code-only commits.
+ */
+async function isStale(root: string, base: string, { area, files }: AreaChange, dirty: Set<string>): Promise<boolean> {
+  if (dirty.has(area.doc)) return false; // doc is being edited right now
+  if (files.some((f) => dirty.has(f))) return true; // newer, uncommitted code
+  const docCommit = await lastCommitTouching(root, base, [area.doc]);
+  if (docCommit === null) return true;
+  return touchedSince(root, docCommit, files);
 }
