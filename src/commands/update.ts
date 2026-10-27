@@ -1,14 +1,15 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import pc from "picocolors";
 import { CONFIG_FILE, loadConfig } from "../core/config.js";
 import { changedFiles, diffFor, headSha, isGitRepo, repoRoot, resolveBase } from "../core/git.js";
 import { groupChanges } from "../core/mapper.js";
 import { SYSTEM_PROMPT, buildUserPrompt, redactSecrets, requestEdits, truncateDiff } from "../core/prompt.js";
-import { colorizePatch, confirmPrompt, renderPatch, type Confirm } from "../core/review.js";
+import { confirmPrompt, type Confirm } from "../core/review.js";
 import { applyEdits, readSections } from "../core/sections.js";
 import { STATE_FILE, readState, writeState } from "../core/state.js";
 import { createProvider, maxDiffChars, type Provider } from "../providers/index.js";
+import { reviewAndApply } from "./shared.js";
 
 export interface UpdateOptions {
   since?: string;
@@ -153,23 +154,16 @@ async function updateArea(a: {
   log(pc.dim("  Asking the model..."));
   const proposed = await requestEdits(a.provider, SYSTEM_PROMPT, user);
   const edits = proposed.filter((e) => (sections[e.section] ?? null) !== e.content.replace(/^\n+|\n+$/g, ""));
-  const newDoc = applyEdits(oldDoc, edits);
-  const patch = renderPatch(a.area.doc, oldDoc, newDoc);
-  if (edits.length === 0 || patch === "") {
-    log(pc.dim("  No doc changes needed."));
-    return "unchanged";
-  }
-
-  for (const e of edits) log(`  ${pc.yellow("•")} ${pc.bold(e.section)}: ${e.reason}`);
-  log("\n" + colorizePatch(patch));
-
-  if (a.opts.dryRun) return "dry-run";
-  if (!a.opts.yes && !(await a.deps.confirm(`Apply changes to ${a.area.doc}?`))) {
-    log(pc.dim("  Skipped."));
-    return "declined";
-  }
-  await mkdir(dirname(a.docPath), { recursive: true });
-  await writeFile(a.docPath, newDoc);
-  log(pc.green(`  ✔ Wrote ${a.area.doc}`));
-  return "applied";
+  const outcome = await reviewAndApply({
+    doc: a.area.doc,
+    docPath: a.docPath,
+    oldDoc,
+    newDoc: applyEdits(oldDoc, edits),
+    reasons: edits,
+    dryRun: a.opts.dryRun,
+    yes: a.opts.yes,
+    confirm: a.deps.confirm,
+    log,
+  });
+  return outcome;
 }

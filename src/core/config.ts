@@ -12,6 +12,14 @@ export const DEFAULT_IGNORE = [
   "**/dist/**",
 ];
 
+const FeatureSchema = z.object({
+  /** Used on the command line (`docsync generate <name>`), so keep it simple. */
+  name: z.string().regex(/^[A-Za-z0-9_-]+$/, "use letters, digits, '-' or '_'"),
+  /** Source files that implement the feature. May span several folders and overlap other features and areas. */
+  paths: z.array(z.string().min(1)).min(1),
+  doc: z.string().min(1),
+});
+
 const AreaSchema = z.object({
   name: z.string().min(1),
   paths: z.array(z.string().min(1)).min(1),
@@ -34,7 +42,10 @@ const BaseSchema = z.object({
   contextWindow: z.number().int().positive().optional(),
   /** Max diff characters sent per area. Defaults depend on the provider. */
   maxDiffChars: z.number().int().positive().optional(),
+  /** Max characters of source code sent per feature (`docsync generate`). Defaults depend on the provider. */
+  maxSourceChars: z.number().int().positive().optional(),
   areas: z.array(AreaSchema).min(1),
+  features: z.array(FeatureSchema).default([]),
   ignore: z.array(z.string()).default(DEFAULT_IGNORE),
 });
 
@@ -42,6 +53,11 @@ export const ConfigSchema = BaseSchema.superRefine((c, ctx) => {
   if (MODEL_REQUIRED.has(c.provider) && !c.model) {
     ctx.addIssue({ code: "custom", path: ["model"], message: `required for provider "${c.provider}"` });
   }
+  const seen = new Set<string>();
+  c.features.forEach((f, i) => {
+    if (seen.has(f.name)) ctx.addIssue({ code: "custom", path: ["features", i, "name"], message: `duplicate feature "${f.name}"` });
+    seen.add(f.name);
+  });
   if (c.provider === "openai-compatible" && !c.baseUrl) {
     ctx.addIssue({ code: "custom", path: ["baseUrl"], message: 'required for provider "openai-compatible"' });
   }
@@ -51,12 +67,14 @@ export const ConfigSchema = BaseSchema.superRefine((c, ctx) => {
 }));
 
 export type Area = z.infer<typeof AreaSchema>;
+export type Feature = z.infer<typeof FeatureSchema>;
 export type Config = z.output<typeof ConfigSchema>;
 
 export const defaultConfig = (): Config => ({
   provider: "anthropic",
   model: DEFAULT_ANTHROPIC_MODEL,
   areas: [{ name: "project", paths: ["**"], doc: "docs/OVERVIEW.md" }],
+  features: [],
   ignore: [...DEFAULT_IGNORE],
 });
 

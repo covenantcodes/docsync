@@ -34,10 +34,10 @@ export function groupByArea(files: string[], areas: Area[]): AreaChange[] {
  */
 export function groupChanges(
   files: string[],
-  config: Pick<Config, "areas" | "ignore">,
+  config: Pick<Config, "areas" | "ignore"> & { features?: Config["features"] },
   ownFiles: string[] = [],
 ): AreaChange[] {
-  const own = new Set([...ownFiles, ...config.areas.map((a) => a.doc)]);
+  const own = new Set([...ownFiles, ...config.areas.map((a) => a.doc), ...(config.features ?? []).map((f) => f.doc)]);
   return groupByArea(
     filterIgnored(files, config.ignore).filter((f) => !own.has(f)),
     config.areas,

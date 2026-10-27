@@ -37,6 +37,7 @@ Commit `docsync.config.json`, `.docsync.json` and your docs.
 |---|---|
 | `docsync` / `docsync update` | Run the update flow. |
 | `docsync init` | Detect workspaces, write `docsync.config.json`, create missing docs with starter sections, write `.docsync.json`. Safe to re-run: existing files are never overwritten. |
+| `docsync generate [feature]` | Write feature docs from the **source code itself**, not a diff. See [Feature docs](#feature-docs). |
 | `docsync check` | No LLM call. Exit 1 if an area's code changed after its doc did. |
 
 `update` flags:
@@ -51,6 +52,47 @@ Commit `docsync.config.json`, `.docsync.json` and your docs.
 `init` flags: `-y, --yes` accepts the detected areas and provider without asking; `--provider <name>`, `--model <name>` and `--base-url <url>` skip the provider questions. `init` looks for API keys in your environment and a running Ollama, and suggests what it finds.
 
 Exit codes: `0` success, `1` an error, a failed area (`update`), or stale docs (`check`). Set `DEBUG=docsync` for stack traces.
+
+## Feature docs
+
+`update` documents *what changed*. `generate` documents *how a feature works*: the endpoints to call, the parameters to send, and the flow. It reads the feature's source files in full, which can span several folders (a mobile app and its API, say).
+
+List features in `docsync.config.json`:
+
+```json
+"features": [
+  {
+    "name": "bills-payment",
+    "paths": ["apps/mobile/src/bills/**", "services/api/src/bills/**"],
+    "doc": "docs/features/bills-payment.md"
+  }
+]
+```
+
+```bash
+npx docsync generate bills-payment --dry-run   # preview
+npx docsync generate bills-payment             # review the diff, apply
+npx docsync generate                           # every feature
+```
+
+Each feature doc has the same managed sections:
+
+| Section | Contents |
+|---|---|
+| `overview` | What the feature does and how the pieces fit. |
+| `flow` | Numbered end-to-end steps, plus a Mermaid sequence diagram when the code shows two or more actors. |
+| `endpoints` | One entry per endpoint: purpose, auth, a request table (parameter, where it goes, type, required), the response, and error cases. |
+| `data-models` | Types, entities and enums. |
+| `configuration` | Env var and flag names (never values). |
+| `edge-cases` | Validation, retries, idempotency, failure handling. |
+
+**How it stays honest.** The model is told to document only what the code shows, to write "Not found in the provided code." when it can't tell, and to cite the files each section comes from. After it replies, docsync mechanically checks that every route, parameter or field name, env var and cited file in the doc actually appears in the source that was sent, and warns about anything that doesn't. This catches most invented endpoints and fields, but it can't prove a doc is *correct*: read the diff before you apply it. (With `--yes` the warnings are printed but the doc is still written.)
+
+Notes:
+- Only git-tracked files are read, ranked so routes, handlers, schemas and API clients come before UI code, then tests and styles. Files that don't fit the budget (`maxSourceChars`, 120,000 characters by default, less for Ollama and `manual`) are left out, with a warning naming them.
+- This sends **complete source files** (not just diffs) to your provider. `ignore`, `.env*` and secret redaction still apply. Use `ollama` if the code can't leave your machine.
+- Feature docs need a strong model with a large context window. Small local models will struggle.
+- `generate` doesn't change `.docsync.json`. In this first version `update` and `check` don't track feature docs yet.
 
 ## Managed sections
 
@@ -99,6 +141,7 @@ Provider settings (all optional unless a provider needs them, see below):
 | `apiKeyEnv` | Name of the environment variable that holds the key, if not the default. |
 | `contextWindow` | Ollama only: context size in tokens (default 16384). |
 | `maxDiffChars` | Most diff characters sent per area. Default 60,000 (24,000 for Ollama, 30,000 for `manual`). |
+| `maxSourceChars` | Most source characters sent per feature (`generate`). Default 120,000 (30,000 for Ollama, 40,000 for `manual`). |
 
 `init` detects areas from `package.json` `workspaces`, `pnpm-workspace.yaml`, or `apps/*`, `packages/*`, `services/*` folders.
 

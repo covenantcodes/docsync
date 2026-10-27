@@ -2,6 +2,7 @@ import { Command } from "commander";
 import pc from "picocolors";
 import pkg from "../package.json" with { type: "json" };
 import { check } from "./commands/check.js";
+import { generate } from "./commands/generate.js";
 import { init, type InitOptions } from "./commands/init.js";
 import { update, type UpdateOptions } from "./commands/update.js";
 
@@ -35,6 +36,15 @@ program
   .option("--base-url <url>", "endpoint for openai-compatible (or a non-default Ollama)")
   .action(async (opts: InitOptions) => {
     process.exitCode = await init(opts);
+  });
+
+program
+  .command("generate [feature]")
+  .description("write feature docs from the source code itself (features are listed in the config)")
+  .option("--dry-run", "show the proposed doc without writing anything")
+  .option("-y, --yes", "apply without asking")
+  .action(async (feature: string | undefined, opts: { dryRun?: boolean; yes?: boolean }) => {
+    process.exitCode = await generate(feature, opts);
   });
 
 program

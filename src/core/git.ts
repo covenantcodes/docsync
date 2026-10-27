@@ -73,3 +73,8 @@ export async function lastCommitTouching(cwd: string, from: string, paths: strin
 export async function touchedSince(cwd: string, from: string, paths: string[]): Promise<boolean> {
   return (await lastCommitTouching(cwd, from, paths)) !== null;
 }
+
+/** Every tracked file (repo-relative, forward slashes). */
+export async function trackedFiles(cwd: string): Promise<string[]> {
+  return (await git(cwd, ["ls-files", "-z"])).split("\0").filter(Boolean);
+}

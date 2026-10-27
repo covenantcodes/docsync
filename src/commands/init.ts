@@ -223,7 +223,9 @@ export async function init(opts: InitOptions = {}, overrides: Partial<InitDeps> 
       apiKeyEnv: undefined,
       contextWindow: undefined,
       maxDiffChars: undefined,
+      maxSourceChars: undefined,
       areas: chosen,
+      features: [],
       ignore: [...DEFAULT_IGNORE],
     };
     await writeFile(configPath, JSON.stringify(config, null, 2) + "\n");

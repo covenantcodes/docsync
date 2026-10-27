@@ -13,7 +13,7 @@ export const PROVIDER_NAMES = ["anthropic", "openai", "gemini", "ollama", "opena
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
 
 type ProviderConfig = Pick<Config, "provider"> &
-  Partial<Pick<Config, "model" | "baseUrl" | "apiKeyEnv" | "contextWindow" | "maxDiffChars">>;
+  Partial<Pick<Config, "model" | "baseUrl" | "apiKeyEnv" | "contextWindow" | "maxDiffChars" | "maxSourceChars">>;
 
 // Small local models have small context windows, and a human pasting into a chat UI has limits too.
 const DEFAULT_MAX_DIFF_CHARS: Record<string, number> = { ollama: 24_000, manual: 30_000 };
@@ -22,6 +22,15 @@ const FALLBACK_MAX_DIFF_CHARS = 60_000;
 /** Max diff characters sent per area for this config. */
 export function maxDiffChars(config: Pick<Config, "provider" | "maxDiffChars">): number {
   return config.maxDiffChars ?? DEFAULT_MAX_DIFF_CHARS[config.provider] ?? FALLBACK_MAX_DIFF_CHARS;
+}
+
+// Whole-feature source is bigger than a diff, so its budget is larger.
+const DEFAULT_MAX_SOURCE_CHARS: Record<string, number> = { ollama: 30_000, manual: 40_000 };
+const FALLBACK_MAX_SOURCE_CHARS = 120_000;
+
+/** Max source-code characters sent per feature for this config. */
+export function maxSourceChars(config: Pick<Config, "provider" | "maxSourceChars">): number {
+  return config.maxSourceChars ?? DEFAULT_MAX_SOURCE_CHARS[config.provider] ?? FALLBACK_MAX_SOURCE_CHARS;
 }
 
 function requireModel(config: ProviderConfig): string {
