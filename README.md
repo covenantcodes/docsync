@@ -36,7 +36,7 @@ Requires Node 20+ and a git repo with at least one commit.
 
 ```bash
 npx docsync init                      # detect areas and a model, write config + starter docs
-export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY / GEMINI_API_KEY; never stored by docsync
+export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY / GEMINI_API_KEY; or run `docsync login` to keep it in your system keychain
 
 # ...make and commit some changes...
 npx docsync                           # propose doc updates, review the diff, apply
@@ -64,12 +64,13 @@ npx docsync generate bills-payment             # review the diff, then apply
 
 ## Feature docs
 
-`docsync generate [feature]` writes a doc for each feature in your config. Every feature doc has the same managed sections:
+`docsync generate [feature]` writes a doc for each feature in your config. Each section gets a heading from docsync, and feature docs are made of these managed sections:
 
 | Section | Contents |
 |---|---|
 | `overview` | What the feature does and how the pieces fit. |
 | `flow` | Numbered end-to-end steps, plus a Mermaid sequence diagram when the code shows two or more actors. |
+| `components` | For UI code: each screen or component, its role, props, state, animations and side effects, and what it renders. |
 | `endpoints` | One entry per endpoint: purpose, auth, a request table (parameter, where it goes, type, required), the response, and error cases. |
 | `data-models` | Types, entities and enums. |
 | `configuration` | Env var and flag names (never values). |
@@ -102,8 +103,11 @@ Feature options:
 | `paths` | Globs for the source files that implement the feature. May span folders and overlap other features and areas. |
 | `doc` | Where the doc is written. |
 | `title` | Optional heading for a newly created doc (default: the name). |
+| `sections` | Optional list of sections to write, e.g. `["overview", "flow", "components", "configuration"]` for a UI feature. Default: all of them. Names: `overview`, `flow`, `components`, `endpoints`, `data-models`, `configuration`, `edge-cases`. |
 
-**How it stays honest.** The model is told to document only what the code shows, to write "Not found in the provided code." when it can't tell, and to cite its sources. After it replies, docsync mechanically checks that every route, parameter or field name, env var and cited file in the doc appears in the source that was sent, and warns about anything that doesn't. This catches most invented endpoints and fields, but it can't prove a doc is *correct*: read the diff before you apply it. (With `--yes` the warnings are printed but the doc is still written.)
+**Empty sections are left out.** If the code shows nothing for a section (no network calls means no `endpoints`), the section is simply not written, and a "Not found in the provided code." placeholder left by an earlier run is removed on the next `generate`. Use `sections` to stop asking for sections that never apply to a feature.
+
+**How it stays honest.** The model is told to document only what the code shows, to leave out sections it has nothing for, and to cite its sources. After it replies, docsync mechanically checks that every route, parameter or field name, env var and cited file in the doc appears in the source that was sent, and warns about anything that doesn't. This catches most invented endpoints and fields, but it can't prove a doc is *correct*: read the diff before you apply it. (With `--yes` the warnings are printed but the doc is still written.)
 
 Notes:
 - Only git-tracked files are read, ranked so routes, handlers, schemas and API clients come before UI code, then tests and styles. Files that don't fit the budget (`maxSourceChars`, 120,000 characters by default, less for Ollama and `manual`) are left out, with a warning naming them.
@@ -133,6 +137,8 @@ Notes:
 | `docsync generate [feature]` | Write feature docs from the **source code itself**. See [Feature docs](#feature-docs). |
 | `docsync init` | Detect workspaces and a model, write `docsync.config.json`, create missing docs with starter sections, write `.docsync.json`. Safe to re-run: existing files are never overwritten. |
 | `docsync check` | No LLM call. Exit 1 if an area's code changed after its doc did. |
+| `docsync login [provider]` | Save an API key in your system's secure store (see [Saved API keys](#saved-api-keys)). |
+| `docsync logout [provider]` | Delete the saved key. |
 
 `update` flags:
 
@@ -188,6 +194,22 @@ Small local models write weaker docs and sometimes break the JSON format. docsyn
 
 The provider interface is one method, `complete(system, user): Promise<string>`, so new providers don't touch the core.
 
+### Saved API keys
+
+Keys normally come from the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or your `apiKeyEnv`). So you don't have to export one in every terminal, docsync can keep it in your operating system's own secure store. docsync never writes a key to a plain-text file.
+
+- `docsync login` stores a key (hidden prompt). `docsync logout` removes it.
+- In an **interactive terminal** with no key set, `docsync` offers `Use your Gemini API key saved in macOS Keychain?`, or asks you to paste one and whether to save it.
+- An environment variable always wins. **Non-interactive runs such as CI never read the secure store or prompt.**
+
+| OS | Stored in | Needs |
+|---|---|---|
+| macOS | Login Keychain (`security`) | nothing |
+| Linux | Secret Service: GNOME Keyring, KDE Wallet (`secret-tool`) | `libsecret-tools` and a running keyring. On a headless box, use the environment variable. |
+| Windows | A file in `%APPDATA%\docsync` encrypted with DPAPI (PowerShell), readable only by your Windows user on that machine | nothing |
+
+The key is passed to these tools on stdin, never as a command-line argument, so it doesn't show up in the process list. Keys containing spaces, quotes or backslashes are rejected (real API keys never do).
+
 ### Slow or busy models
 
 While the model works, docsync shows a live line with the elapsed time and how many characters of the reply have arrived (replies are streamed), so a slow model is obvious rather than silent:
@@ -232,7 +254,7 @@ While the model works, docsync shows a live line with the elapsed time and how m
 - `areas[].paths` are glob patterns relative to the repo root. A file belongs to the **first** area that matches it; files matching no area are ignored. Areas drive `docsync` (update) and `check`.
 - `features` drive `docsync generate`. Unlike areas, a feature can span folders and overlap anything else.
 - `ignore` globs are applied before anything is sent. `**/.env*` is always ignored, even if you remove it from the list.
-- There is no place for API keys in the config, by design. Keys come from the environment.
+- There is no place for API keys in the config, by design. Keys come from the environment or your system's secure store (see [Saved API keys](#saved-api-keys)).
 
 Provider settings (all optional unless a provider needs them, see [Providers](#providers)):
 
@@ -284,7 +306,7 @@ A doc counts as up to date when it was changed *after* the area's latest code ch
 - Files matching `ignore` and every `.env*` file are removed *before* anything is built, so they are never sent.
 - Obvious secrets in what is sent (`*KEY=`, `*SECRET=`, `*TOKEN=`, `*PASSWORD=` values, private key blocks, and well-known token formats) are replaced with `[REDACTED]`. This is best-effort pattern matching, not a guarantee: review your `ignore` list for anything sensitive.
 - Diffs over about 60,000 characters per area are truncated, and feature source over its budget is left out, with a warning.
-- docsync has no telemetry. `init` only talks to `localhost` (to look for Ollama). It never commits, pushes, or runs destructive git commands, and it only writes the doc files, `docsync.config.json` and `.docsync.json`.
+- If you run `docsync login`, the key is stored by your operating system's secure store, not by docsync and never in the repository. docsync has no telemetry. `init` only talks to `localhost` (to look for Ollama). It never commits, pushes, or runs destructive git commands, and it only writes the doc files, `docsync.config.json` and `.docsync.json`.
 
 ## Known limitations
 

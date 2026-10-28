@@ -5,10 +5,10 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generate } from "../src/commands/generate.js";
 import { parseConfig } from "../src/core/config.js";
-import { FEATURE_SECTIONS, buildFeaturePrompt } from "../src/core/feature-prompt.js";
+import { FEATURE_SECTIONS, buildFeaturePrompt, isEmptySection, sectionsFor, stripHeading, withHeading } from "../src/core/feature-prompt.js";
 import { groupChanges } from "../src/core/mapper.js";
 import { collectSources, rankPath, selectFeatureFiles } from "../src/core/source.js";
-import { readSections } from "../src/core/sections.js";
+import { readSections, removeSection } from "../src/core/sections.js";
 import { verifyEdits } from "../src/core/verify.js";
 import { normalizeTables } from "../src/core/markdown.js";
 import { parseEdits } from "../src/core/prompt.js";
@@ -25,6 +25,12 @@ describe("config: features", () => {
     expect(() => parseConfig({ areas, features: [{ ...f, name: "has space" }] })).toThrow(/letters, digits/);
     expect(() => parseConfig({ areas, features: [f, f] })).toThrow(/duplicate feature/);
     expect(() => parseConfig({ areas, features: [{ ...f, paths: [] }] })).toThrow();
+  });
+  it("accepts a per-feature section list and rejects unknown or empty ones", () => {
+    const f = { name: "splash", paths: ["x/**"], doc: "d.md" };
+    expect(parseConfig({ areas, features: [{ ...f, sections: ["overview", "components"] }] }).features[0]!.sections).toEqual(["overview", "components"]);
+    expect(() => parseConfig({ areas, features: [{ ...f, sections: ["nope"] }] })).toThrow(/use one of/);
+    expect(() => parseConfig({ areas, features: [{ ...f, sections: [] }] })).toThrow();
   });
   it("accepts an optional title", () => {
     const f = { name: "download-api", title: "Download API", paths: ["x/**"], doc: "d.md" };
@@ -57,6 +63,38 @@ describe("normalizeTables", () => {
   it("is applied to every reply", () => {
     const reply = JSON.stringify([{ section: "s", content: "| A | B |\n| 1 | 2 |", reason: "r" }]);
     expect(parseEdits(reply)[0]!.content).toContain("|---|---|");
+  });
+});
+
+describe("feature sections", () => {
+  it("sectionsFor: all by default, otherwise the chosen ones in template order", () => {
+    expect(sectionsFor({})).toBe(FEATURE_SECTIONS);
+    expect(sectionsFor({ sections: ["configuration", "overview", "components"] }).map((s) => s.name)).toEqual(["overview", "components", "configuration"]);
+  });
+  it("isEmptySection: placeholders and blanks, but not real content", () => {
+    expect(isEmptySection("Not found in the provided code.")).toBe(true);
+    expect(isEmptySection("Not found in the provided code.\n\nSources: `a.ts`")).toBe(true);
+    expect(isEmptySection("## Endpoints\n\nNot found in the provided code.".replace("## Endpoints\n\n", ""))).toBe(true);
+    expect(isEmptySection("  \n")).toBe(true);
+    expect(isEmptySection("### POST /pay\nNot found in the provided code.")).toBe(false);
+  });
+  it("heading helpers round-trip", () => {
+    const s = FEATURE_SECTIONS.find((x) => x.name === "data-models")!;
+    expect(withHeading(s, "\nbody\n")).toBe("## Data models\n\nbody");
+    expect(stripHeading(s, withHeading(s, "body"))).toBe("body");
+  });
+  it("the prompt lists only the requested sections and asks the model to omit empty ones", () => {
+    const wanted = sectionsFor({ sections: ["overview", "components"] });
+    const p = buildFeaturePrompt({ feature: "splash", doc: "d.md", sections: {}, files: [], omitted: [], wanted });
+    expect(p).toContain("- components:");
+    expect(p).not.toContain("- endpoints:");
+  });
+  it("removeSection deletes one block and leaves the rest", () => {
+    const md = "# T\n\n<!-- docsync:start a -->\nA\n<!-- docsync:end -->\n\n<!-- docsync:start b -->\nB\n<!-- docsync:end -->\n";
+    const out = removeSection(md, "a");
+    expect(Object.keys(readSections(out))).toEqual(["b"]);
+    expect(out.startsWith("# T\n\n")).toBe(true);
+    expect(removeSection(md, "zzz")).toBe(md);
   });
 });
 
@@ -244,6 +282,43 @@ describe("generate", () => {
     expect(out).toContain("Reading 3 files"); // routes, screen, test; .env excluded
   });
 
+  it("puts a heading above each section and never writes 'Not found' placeholders", async () => {
+    const reply = JSON.stringify([
+      edit("overview", "Pay bills.\nSources: `apps/mobile/src/bills/PayScreen.tsx`"),
+      edit("endpoints", "Not found in the provided code.\n\nSources: `apps/mobile/src/bills/PayScreen.tsx`"),
+    ]);
+    await go("bills-payment", { yes: true }, provider(reply));
+    const doc = await read("docs/features/bills-payment.md");
+    expect(Object.keys(readSections(doc))).toEqual(["overview"]);
+    expect(readSections(doc).overview!.startsWith("## Overview\n\nPay bills.")).toBe(true);
+    expect(doc).not.toContain("Not found");
+  });
+
+  it("only asks for, and only accepts, the feature's configured sections", async () => {
+    await put("docsync.config.json", JSON.stringify({
+      areas: [{ name: "all", paths: ["**"], doc: "docs/OVERVIEW.md" }],
+      features: [{ name: "bills-payment", paths: ["apps/mobile/src/bills/**"], doc: "docs/features/bills-payment.md", sections: ["overview", "components"] }],
+    }));
+    await run("add", "-A");
+    await run("commit", "-q", "-m", "cfg");
+    const p = provider(JSON.stringify([edit("overview", "o"), edit("components", "### PayScreen\nrole"), edit("endpoints", "### POST /bills/pay\nx")]));
+    const { out } = await go("bills-payment", { yes: true }, p);
+    const [, user] = p.complete.mock.calls[0]!;
+    expect(user).toContain("- components:");
+    expect(user).not.toContain("- endpoints:");
+    expect(out).toContain("Ignored 1 section");
+    expect(Object.keys(readSections(await read("docs/features/bills-payment.md")))).toEqual(["overview", "components"]);
+  });
+
+  it("removes stale 'Not found' sections from earlier runs, but keeps ones with real content", async () => {
+    await put("docs/features/bills-payment.md",
+      "# Bills\n\n<!-- docsync:start endpoints -->\nNot found in the provided code.\n\nSources: `a.ts`\n<!-- docsync:end -->\n\n<!-- docsync:start data-models -->\n### Thing\ntext\n<!-- docsync:end -->\n");
+    const { out } = await go("bills-payment", { yes: true }, provider(JSON.stringify([edit("overview", "o")])));
+    expect(out).toContain("removed");
+    const secs = readSections(await read("docs/features/bills-payment.md"));
+    expect(Object.keys(secs).sort()).toEqual(["data-models", "overview"]);
+  });
+
   it("sends whole files, never .env content or secrets", async () => {
     const p = provider(good);
     await go("bills-payment", { yes: true }, p);
@@ -306,7 +381,7 @@ describe("generate", () => {
 
   it("ignores sections outside the template and drops unchanged ones", async () => {
     const reply = JSON.stringify([edit("changelog", "x"), edit("overview", "same")]);
-    await put("docs/features/bills-payment.md", "<!-- docsync:start overview -->\nsame\n<!-- docsync:end -->\n");
+    await put("docs/features/bills-payment.md", "<!-- docsync:start overview -->\n## Overview\n\nsame\n<!-- docsync:end -->\n");
     const { out } = await go("bills-payment", { yes: true }, provider(reply));
     expect(out).toContain("Ignored 1 section");
     expect(out).toContain("No doc changes needed");

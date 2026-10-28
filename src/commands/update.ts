@@ -9,6 +9,7 @@ import { createStatus } from "../core/progress.js";
 import { confirmPrompt, type Confirm } from "../core/review.js";
 import { applyEdits, readSections } from "../core/sections.js";
 import { STATE_FILE, readState, writeState } from "../core/state.js";
+import { resolveEnv } from "../core/credentials.js";
 import { createProvider, maxDiffChars, type Provider } from "../providers/index.js";
 import { reviewAndApply } from "./shared.js";
 
@@ -70,7 +71,7 @@ export async function update(opts: UpdateOptions, overrides: Partial<UpdateDeps>
   const root = await repoRoot(deps.cwd);
   const config = await loadConfig(root);
   // Created up front so a missing API key fails before any git work.
-  const provider = deps.provider ?? createProvider(config);
+  const provider = deps.provider ?? createProvider(config, await resolveEnv(config));
 
   if (!opts.yes && !opts.dryRun && !deps.isInteractive) {
     throw new Error("Not running in an interactive terminal. Pass --yes to apply changes, or --dry-run to preview.");

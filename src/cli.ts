@@ -3,6 +3,7 @@ import pc from "picocolors";
 import pkg from "../package.json" with { type: "json" };
 import { check } from "./commands/check.js";
 import { generate } from "./commands/generate.js";
+import { login, logout } from "./commands/login.js";
 import { init, type InitOptions } from "./commands/init.js";
 import { update, type UpdateOptions } from "./commands/update.js";
 
@@ -45,6 +46,20 @@ program
   .option("-y, --yes", "apply without asking")
   .action(async (feature: string | undefined, opts: { dryRun?: boolean; yes?: boolean }) => {
     process.exitCode = await generate(feature, opts);
+  });
+
+program
+  .command("login [provider]")
+  .description("save an API key in your system's secure store (provider defaults to the one in your config)")
+  .action(async (provider: string | undefined) => {
+    process.exitCode = await login(provider);
+  });
+
+program
+  .command("logout [provider]")
+  .description("delete the API key saved by `docsync login`")
+  .action(async (provider: string | undefined) => {
+    process.exitCode = await logout(provider);
   });
 
 program

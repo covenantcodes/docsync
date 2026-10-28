@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import { SECTION_NAMES } from "./feature-prompt.js";
 
 export const CONFIG_FILE = "docsync.config.json";
 
@@ -20,6 +21,11 @@ const FeatureSchema = z.object({
   /** Source files that implement the feature. May span several folders and overlap other features and areas. */
   paths: z.array(z.string().min(1)).min(1),
   doc: z.string().min(1),
+  /** Which sections to write (default: all). Lets a UI feature skip "endpoints", for example. */
+  sections: z
+    .array(z.enum(SECTION_NAMES as [string, ...string[]], { error: `use one of: ${SECTION_NAMES.join(", ")}` }))
+    .min(1)
+    .optional(),
 });
 
 const AreaSchema = z.object({

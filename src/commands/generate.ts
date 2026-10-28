@@ -2,14 +2,15 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import pc from "picocolors";
 import { CONFIG_FILE, loadConfig, type Feature } from "../core/config.js";
-import { FEATURE_SECTIONS, FEATURE_SYSTEM_PROMPT, buildFeaturePrompt } from "../core/feature-prompt.js";
+import { FEATURE_SYSTEM_PROMPT, buildFeaturePrompt, isEmptySection, sectionsFor, withHeading } from "../core/feature-prompt.js";
 import { isGitRepo, repoRoot, trackedFiles } from "../core/git.js";
 import { createStatus } from "../core/progress.js";
 import { requestEdits } from "../core/prompt.js";
-import { applyEdits, readSections } from "../core/sections.js";
+import { applyEdits, readSections, removeSection } from "../core/sections.js";
 import { collectSources, selectFeatureFiles } from "../core/source.js";
 import { STATE_FILE } from "../core/state.js";
 import { verifyEdits, type Finding } from "../core/verify.js";
+import { resolveEnv } from "../core/credentials.js";
 import { createProvider, maxSourceChars } from "../providers/index.js";
 import { reviewAndApply } from "./shared.js";
 import type { UpdateDeps } from "./update.js";
@@ -81,7 +82,7 @@ export async function generate(
     }
   }
 
-  const provider = deps.provider ?? createProvider(config);
+  const provider = deps.provider ?? createProvider(config, await resolveEnv(config));
   if (!opts.yes && !opts.dryRun && !deps.isInteractive) {
     throw new Error("Not running in an interactive terminal. Pass --yes to apply changes, or --dry-run to preview.");
   }
@@ -109,6 +110,7 @@ export async function generate(
       const oldDoc = existing ?? `# ${feature.title ?? titleCase(feature.name)}\n`;
       const sections = readSections(oldDoc);
 
+      const wanted = sectionsFor(feature);
       const status = createStatus({ log, tty: deps.tty, write: deps.write });
       status.start();
       let proposed;
@@ -116,7 +118,7 @@ export async function generate(
         proposed = await requestEdits(
           provider,
           FEATURE_SYSTEM_PROMPT,
-          buildFeaturePrompt({ feature: feature.name, doc: feature.doc, sections, files, omitted }),
+          buildFeaturePrompt({ feature: feature.name, doc: feature.doc, sections, files, omitted, wanted }),
           status.event,
         );
         status.stop("done");
@@ -125,19 +127,27 @@ export async function generate(
         throw err;
       }
 
-      const order = FEATURE_SECTIONS.map((s) => s.name);
-      const known = proposed.filter((e) => order.includes(e.section));
-      if (known.length < proposed.length) log(pc.dim(`  Ignored ${proposed.length - known.length} section(s) outside the feature template.`));
-      const edits = known
-        .filter((e) => (sections[e.section] ?? null) !== e.content.replace(/^\n+|\n+$/g, ""))
-        .sort((a, b) => order.indexOf(a.section) - order.indexOf(b.section));
+      const byName = new Map(wanted.map((w) => [w.name, w]));
+      const known = proposed.filter((e) => byName.has(e.section));
+      if (known.length < proposed.length) log(pc.dim(`  Ignored ${proposed.length - known.length} section(s) outside this feature's section list.`));
+      // A section the model had nothing to say about is left out, not written as "Not found".
+      const written = known.filter((e) => !isEmptySection(e.content));
+      const edits = written
+        .map((e) => ({ ...e, content: withHeading(byName.get(e.section)!, e.content) }))
+        .filter((e) => (sections[e.section] ?? null) !== e.content)
+        .sort((a, b) => wanted.indexOf(byName.get(a.section)!) - wanted.indexOf(byName.get(b.section)!));
+      // Placeholders left by earlier runs ("Not found...") are cleaned up once the model still has nothing for them.
+      const removals = wanted
+        .filter((w) => w.name in sections && isEmptySection(sections[w.name]!) && !written.some((e) => e.section === w.name))
+        .map((w) => w.name);
+      const newDoc = removals.reduce(removeSection, applyEdits(oldDoc, edits));
 
       await reviewAndApply({
         doc: feature.doc,
         docPath,
         oldDoc,
-        newDoc: applyEdits(oldDoc, edits),
-        reasons: edits,
+        newDoc,
+        reasons: [...edits, ...removals.map((section) => ({ section, reason: "removed: nothing in the code to document" }))],
         warnings: edits.length ? describeFindings(verifyEdits(edits, files)) : [],
         dryRun: opts.dryRun,
         yes: opts.yes,

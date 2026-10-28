@@ -50,6 +50,12 @@ export function writeSection(md: string, name: string, content: string): string 
   return base + gap + block + eol;
 }
 
+/** Deletes the named block (and the blank line after it). A no-op if it isn't there. */
+export function removeSection(md: string, name: string): string {
+  const re = new RegExp(`<!--\\s*docsync:start\\s+${name}\\s*-->(?:(?!<!--\\s*docsync:start)[\\s\\S])*?<!--\\s*docsync:end\\s*-->(?:\\r?\\n){0,2}`);
+  return md.replace(re, "");
+}
+
 export interface SectionEdit {
   section: string;
   content: string;
